@@ -66,7 +66,7 @@ CASES = [
     },
 ]
 
-TIER_RE = re.compile(r"<!--\s*tier=([a-z0-9]+)\s*-->")
+TIER_RE = re.compile(r"<!--\s*tier=([a-z0-9:]+)\s*-->")
 
 
 def run_case(case: dict, keep: bool) -> tuple[bool, list[str]]:

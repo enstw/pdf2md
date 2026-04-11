@@ -259,7 +259,19 @@ def _extract_page(
     debug: bool = False,
     debug_label: str = "",
 ) -> tuple[str, str]:
-    """Return (text, tier) for one page. Tier ∈ {pymupdf4llm, pymupdf, ocr, empty}.
+    """Return (text, tier) for one page.
+
+    Tier values:
+
+    - ``"pymupdf4llm"`` — clean tier-1 extraction (text layer present
+      and language-appropriate).
+    - ``"pymupdf"`` — clean tier-2 extraction (raw ``page.get_text``).
+    - ``"ocr"`` — clean tier-3 OCR output.
+    - ``"fallback:pymupdf4llm"`` / ``"fallback:pymupdf"`` — a last-resort
+      return of text that was considered gibberish by the heuristic but
+      was the only non-empty candidate (no OCR available). Downstream
+      callers should treat these as suspect.
+    - ``"empty"`` — no text could be produced for this page.
 
     When ``debug`` is true, a single line of diagnostics is written to
     stderr showing the length and accept/reject reason for each tier
@@ -316,13 +328,18 @@ def _extract_page(
                 file=sys.stderr,
             )
 
-    # Nothing worked cleanly. Return whatever non-empty text we've got, or
-    # an empty string if the page is truly blank.
-    fallback = t1 or t2
-    tier = ("pymupdf4llm" if fallback == t1 and t1 else
-            "pymupdf" if fallback else "empty")
-    _emit(f"{tier}(fallback)")
-    return fallback, tier
+    # Nothing worked cleanly. Return whatever non-empty text we've got
+    # — but label it as a fallback so downstream tooling can tell the
+    # difference between "tier 1 was clean" and "tier 1 was gibberish
+    # and we gave up and returned it anyway."
+    if t1:
+        _emit("fallback:pymupdf4llm")
+        return t1, "fallback:pymupdf4llm"
+    if t2:
+        _emit("fallback:pymupdf")
+        return t2, "fallback:pymupdf"
+    _emit("empty")
+    return "", "empty"
 
 
 def _needs_ocr_scan(
