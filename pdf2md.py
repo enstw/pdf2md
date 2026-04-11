@@ -81,7 +81,13 @@ def _lookup_language(code: str) -> _Language | None:
     """Resolve a BCP-47 code to a :class:`_Language`.
 
     Exact match first, then prefix fallback: ``"en"`` → ``en-US``,
-    ``"zh"`` → first ``zh-*`` entry. Returns ``None`` for unknown codes.
+    ``"zh"`` → ``zh-Hant``. Returns ``None`` for unknown codes.
+
+    The prefix fallback returns the *first* entry in ``LANGUAGES`` whose
+    key starts with ``<prefix>-``. This means the insertion order of
+    ``LANGUAGES`` is load-bearing: the first ``en-*`` / ``zh-*`` row
+    becomes the default for bare ``en`` / ``zh``. Order the table
+    accordingly when adding new languages.
     """
     if code in LANGUAGES:
         return LANGUAGES[code]
