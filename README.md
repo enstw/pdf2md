@@ -1,5 +1,21 @@
 # pdf2md
 
+> **Status: superseded by Claude Code.** Since early 2025, [Claude
+> Code](https://claude.com/claude-code)'s `Read` tool natively renders PDF
+> pages and transcribes them through Claude's vision weights, producing
+> Markdown output that is materially better than any local CPU pipeline on
+> scanned or mixed-language documents — and requires zero install,
+> zero model downloads, and no extra process. For new projects, prefer
+> dropping PDFs into a Claude Code session (or scripting the headless
+> `claude -p "..."` mode) instead of running this tool.
+>
+> `pdf2md` is still useful as a **fully offline, quota-free** path for
+> clean text-layer PDFs where sub-second extraction matters: the tier-1
+> `pymupdf4llm` route is ~50× faster than any vision-based approach
+> (benchmarked 2026-04-12 against [Marker](https://github.com/VikParuchuri/marker)),
+> runs without a network, and incurs no subscription usage. The rest of
+> this README documents that offline path.
+
 Convert PDFs to Markdown with page markers, with a tiered extraction strategy
 that gracefully degrades from structured text to OCR on scanned pages.
 
