@@ -277,9 +277,13 @@ def _extract_page(
             line = " | ".join(trace) + f" → tier={tier}"
             print(f"[pdf2md:debug p={debug_label}] {line}", file=sys.stderr)
 
+    # Always collect both text-layer variants up front: even in force_ocr
+    # mode they're kept as last-resort fallbacks if OCR itself fails.
+    t1 = (md_text or "").strip()
+    t2 = (doc[physical_idx].get_text() or "").strip()
+
     if not force_ocr:
         # Tier 1: pymupdf4llm
-        t1 = (md_text or "").strip()
         gib1, reason1 = _classify_text(t1, langs) if t1 else (True, "empty")
         _note("t1", t1, f"reject:{reason1}" if gib1 else f"accept:{reason1}")
         if t1 and not gib1:
@@ -287,17 +291,12 @@ def _extract_page(
             return t1, "pymupdf4llm"
 
         # Tier 2: raw pymupdf text
-        t2 = (doc[physical_idx].get_text() or "").strip()
         gib2, reason2 = _classify_text(t2, langs) if t2 else (True, "empty")
         _note("t2", t2, f"reject:{reason2}" if gib2 else f"accept:{reason2}")
         if t2 and not gib2:
             _emit("pymupdf")
             return t2, "pymupdf"
     else:
-        # force_ocr: skip tiers 1-2 but keep the strings around as a
-        # last-resort fallback if OCR itself fails.
-        t1 = (md_text or "").strip()
-        t2 = (doc[physical_idx].get_text() or "").strip()
         _note("t1", t1, "skipped:force_ocr")
         _note("t2", t2, "skipped:force_ocr")
 
