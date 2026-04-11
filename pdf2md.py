@@ -25,7 +25,6 @@ Each page is annotated in the output with the tier that produced its text.
 
 from __future__ import annotations
 
-import re
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -53,16 +52,87 @@ _TESSERACT_LANG = {
 }
 
 
-def is_mostly_gibberish(text: str) -> bool:
-    """Heuristic tuned for Traditional Chinese documents."""
+# Unicode ranges per script family. Latin covers ASCII letters +
+# Latin-1 Supplement + Latin Extended A/B (enough for most European
+# languages). CJK ranges cover Unified Ideographs + Extension A +
+# Compatibility Ideographs (Preview sometimes emits the latter).
+_SCRIPT_RANGES: dict[str, list[tuple[int, int]]] = {
+    "latin": [(0x0041, 0x005A), (0x0061, 0x007A), (0x00C0, 0x024F)],
+    "cjk":   [(0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0xF900, 0xFAFF)],
+    "kana":  [(0x3040, 0x309F), (0x30A0, 0x30FF)],
+    "hangul": [(0xAC00, 0xD7AF)],
+    "cyrillic": [(0x0400, 0x04FF)],
+}
+
+# BCP-47 language prefix → list of _SCRIPT_RANGES keys.
+_LANG_SCRIPTS: dict[str, list[str]] = {
+    "zh": ["cjk"],
+    "ja": ["cjk", "kana"],
+    "ko": ["hangul", "cjk"],
+    "ru": ["cyrillic"],
+    "en": ["latin"], "fr": ["latin"], "de": ["latin"], "es": ["latin"],
+    "it": ["latin"], "pt": ["latin"], "nl": ["latin"], "sv": ["latin"],
+    "pl": ["latin"], "tr": ["latin"],
+}
+
+
+def _script_ranges_for_langs(langs: list[str]) -> list[tuple[int, int]]:
+    seen: set[str] = set()
+    ranges: list[tuple[int, int]] = []
+    for lg in langs:
+        prefix = lg.split("-", 1)[0].lower()
+        for key in _LANG_SCRIPTS.get(prefix, []):
+            if key in seen:
+                continue
+            seen.add(key)
+            ranges.extend(_SCRIPT_RANGES[key])
+    return ranges
+
+
+def is_mostly_gibberish(text: str, langs: list[str] | None = None) -> bool:
+    """Return True iff ``text`` is too unlike any expected script to trust.
+
+    Rejects in order:
+
+    1. Empty / whitespace-only text.
+    2. Text with fewer than 5 alphanumeric characters — pymupdf4llm
+       sometimes returns residual markdown markers like ``"##"`` for
+       image-dominant pages; we don't want those to masquerade as
+       successful extraction.
+    3. Short texts (<50 non-whitespace chars) that cleared the alnum
+       check are trusted — too little signal for script analysis.
+    4. Longer texts are checked against the Unicode ranges of every
+       language in ``langs`` (Latin for en/fr/de/..., CJK for zh/ja,
+       Hangul for ko, Cyrillic for ru). A text is gibberish iff *none*
+       of the expected scripts cover at least 20% of non-whitespace
+       characters.
+    """
     if not text:
         return True
-    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-    total_chars = len(text.strip())
-    if total_chars == 0:
+    non_ws = [c for c in text if not c.isspace()]
+    total = len(non_ws)
+    if total == 0:
         return True
-    ratio = chinese_chars / total_chars
-    return ratio < 0.2 and total_chars > 50
+
+    alnum = sum(1 for c in non_ws if c.isalnum())
+    if alnum < 5:
+        return True
+
+    if total < 50:
+        return False
+
+    ranges = _script_ranges_for_langs(langs or [])
+    if not ranges:
+        return False
+
+    hits = 0
+    for c in non_ws:
+        o = ord(c)
+        for lo, hi in ranges:
+            if lo <= o <= hi:
+                hits += 1
+                break
+    return hits / total < 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -146,17 +216,18 @@ def _extract_page(
     md_text: str,
     per_page_ocr,  # callable(fitz.Page) -> str, or None
     force_ocr: bool,
+    langs: list[str],
 ) -> tuple[str, str]:
     """Return (text, tier) for one page. Tier ∈ {pymupdf4llm, pymupdf, ocr, empty}."""
     if not force_ocr:
         # Tier 1: pymupdf4llm
         t1 = (md_text or "").strip()
-        if t1 and not is_mostly_gibberish(t1):
+        if t1 and not is_mostly_gibberish(t1, langs):
             return t1, "pymupdf4llm"
 
         # Tier 2: raw pymupdf text
         t2 = (doc[physical_idx].get_text() or "").strip()
-        if t2 and not is_mostly_gibberish(t2):
+        if t2 and not is_mostly_gibberish(t2, langs):
             return t2, "pymupdf"
     else:
         t1 = (md_text or "").strip()
@@ -181,15 +252,17 @@ def _extract_page(
                       "pymupdf" if fallback else "empty")
 
 
-def _needs_ocr_scan(doc: fitz.Document, md_chunks: list[dict]) -> bool:
+def _needs_ocr_scan(
+    doc: fitz.Document, md_chunks: list[dict], langs: list[str]
+) -> bool:
     """Do any pages fail both tier 1 and tier 2? (Pre-OCR scan.)"""
     for chunk in md_chunks:
         idx = chunk["metadata"].get("page_number", 1) - 1
         t1 = (chunk.get("text") or "").strip()
-        if t1 and not is_mostly_gibberish(t1):
+        if t1 and not is_mostly_gibberish(t1, langs):
             continue
         t2 = (doc[idx].get_text() or "").strip()
-        if not t2 or is_mostly_gibberish(t2):
+        if not t2 or is_mostly_gibberish(t2, langs):
             return True
     return False
 
@@ -206,10 +279,16 @@ def _write_markdown(
     force_ocr: bool,
     per_page_ocr,  # callable(fitz.Page) -> str, or None
     backend_label: str,
+    langs: list[str],
 ):
     doc = fitz.open(str(extract_pdf))
     label_doc = doc if label_pdf == extract_pdf else fitz.open(str(label_pdf))
-    md_chunks = pymupdf4llm.to_markdown(doc, page_chunks=True)
+    # use_ocr=False: prevent pymupdf4llm from silently invoking tesseract on
+    # pages where layout analysis can't find text. We want tier 1 to mean
+    # "text layer was present and readable", nothing else — any OCR happens
+    # explicitly at tier 3 (Vision on macOS, ocrmypdf elsewhere) so the tier
+    # annotation in the output reflects reality.
+    md_chunks = pymupdf4llm.to_markdown(doc, page_chunks=True, use_ocr=False)
 
     with open(output_md, "w", encoding="utf-8") as f:
         f.write(f"<!-- pdf2md: platform={sys.platform} ocr={backend_label} -->\n\n")
@@ -245,6 +324,7 @@ def _write_markdown(
                 chunk.get("text", ""),
                 per_page_ocr=per_page_ocr,
                 force_ocr=force_ocr,
+                langs=langs,
             )
 
             if tier != "pymupdf4llm":
@@ -287,6 +367,7 @@ def convert_with_transition_markers(
             force_ocr=force_ocr,
             per_page_ocr=lambda page: _ocr_page_vision(page, langs),
             backend_label=backend,
+            langs=langs,
         )
         return
 
@@ -296,8 +377,10 @@ def convert_with_transition_markers(
     else:
         probe = fitz.open(str(src))
         try:
-            probe_chunks = pymupdf4llm.to_markdown(probe, page_chunks=True)
-            needs_ocr = _needs_ocr_scan(probe, probe_chunks)
+            probe_chunks = pymupdf4llm.to_markdown(
+                probe, page_chunks=True, use_ocr=False
+            )
+            needs_ocr = _needs_ocr_scan(probe, probe_chunks, langs)
         finally:
             probe.close()
 
@@ -312,6 +395,7 @@ def convert_with_transition_markers(
             force_ocr=False,
             per_page_ocr=None,
             backend_label=backend,
+            langs=langs,
         )
         return
 
@@ -329,6 +413,7 @@ def convert_with_transition_markers(
             force_ocr=False,
             per_page_ocr=None,
             backend_label=backend,
+            langs=langs,
         )
 
 
