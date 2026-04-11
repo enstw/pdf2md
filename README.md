@@ -1,0 +1,61 @@
+# pdf2md
+
+Convert PDFs to Markdown with page markers, with a tiered extraction strategy
+that gracefully degrades from structured text to OCR on scanned pages.
+
+Single-file PEP 723 script — run it with [`uv`](https://docs.astral.sh/uv/)
+and dependencies are resolved automatically.
+
+## Extraction tiers
+
+For each page:
+
+1. **`pymupdf4llm`** — structured Markdown (headings, lists, tables).
+   Used when the PDF has a clean text layer.
+2. **raw `pymupdf`** — plain `page.get_text()`.
+   Used when `pymupdf4llm` garbles the output but the underlying text layer
+   is actually fine (e.g., unusual font encodings or layout heuristics).
+3. **OCR** — only when no usable text layer exists:
+   - **macOS** → Apple [Vision framework][vision]
+     (`VNRecognizeTextRequest`, the same engine Preview's Live Text uses).
+     GPU-accelerated, no external binaries.
+   - **Linux / other** → [`ocrmypdf`][ocrmypdf], which adds deskew + noise
+     cleanup on top of tesseract.
+
+Each page in the output is annotated with the tier that produced its text, so
+you can audit where the extractor fell back.
+
+[vision]: https://developer.apple.com/documentation/vision/vnrecognizetextrequest
+[ocrmypdf]: https://ocrmypdf.readthedocs.io/
+
+## Usage
+
+```bash
+# Basic
+./pdf2md.py input.pdf output.md
+
+# Book with printed page 1 on the 275th physical page
+./pdf2md.py input.pdf output.md --offset 274
+
+# Force OCR on every page (ignore existing text layer)
+./pdf2md.py input.pdf output.md --force-ocr
+
+# Non-default languages (BCP-47 codes; mapped to tesseract on Linux)
+./pdf2md.py input.pdf output.md --langs en-US,ja-JP
+```
+
+Default languages: `zh-Hant,en-US`.
+
+## Requirements
+
+- [`uv`](https://docs.astral.sh/uv/) to run the script
+- **macOS**: macOS 13+ (Ventura) for Traditional Chinese support in Vision.
+  No other setup — `pyobjc-framework-Vision` is pulled in automatically.
+- **Linux**: `tesseract` + language data on `PATH`. Example for Ubuntu/Debian:
+  ```bash
+  sudo apt install tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng
+  ```
+
+## License
+
+MIT
