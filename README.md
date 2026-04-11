@@ -46,6 +46,13 @@ you can audit where the extractor fell back.
 
 Default languages: `zh-Hant,en-US`.
 
+The `--langs` flag does two things: it tells the OCR backend what
+scripts to expect (Vision recognition languages on macOS; tesseract
+language packs on Linux), and it drives the tier-1/tier-2 "is this
+text real content" heuristic. Passing only `en-US` on a Chinese
+document will cause every tier-1 extraction to be flagged as
+gibberish and fall through to OCR.
+
 ## Requirements
 
 - [`uv`](https://docs.astral.sh/uv/) to run the script
@@ -55,6 +62,19 @@ Default languages: `zh-Hant,en-US`.
   ```bash
   sudo apt install tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-eng
   ```
+
+## Tests
+
+A smoke test suite in `tests/` runs `pdf2md.py` against four fixture
+PDFs covering all three extraction tiers:
+
+```bash
+./tests/smoke.py           # all cases (~33s on macOS)
+./tests/smoke.py --quick   # skip the scanned-OCR case (~18s)
+./tests/smoke.py --keep    # preserve output markdown for inspection
+```
+
+See [`tests/README.md`](tests/README.md) for what each fixture covers.
 
 ## License
 
