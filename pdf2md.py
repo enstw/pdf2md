@@ -25,8 +25,10 @@ Each page is annotated in the output with the tier that produced its text.
 
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -376,6 +378,130 @@ def _needs_ocr_scan(
 
 
 # ---------------------------------------------------------------------------
+# Page-number offset detection
+# ---------------------------------------------------------------------------
+
+# Isolated integer token: 1–4 digits not adjacent to other digits. Rejects
+# fragments of longer numbers (e.g. "2003" in "2003年10月" doesn't match
+# "200" or "003"; IP-address octets like "163" in "163.13.35.40" still match
+# individually but are suppressed by the plausibility bound below).
+_PAGE_NUM_RE = re.compile(r"(?<!\d)(\d{1,4})(?!\d)")
+
+# Top / bottom this fraction of the page counts as header / footer zone.
+# Tuned so a typical running header at ~5% from the top and a page-number
+# footer at ~95% both fall inside, but body paragraphs don't.
+_MARGIN_FRAC = 0.12
+
+
+def _page_margin_lines(page: fitz.Page) -> list[str]:
+    """Short text lines lying in the top or bottom 12% of a page.
+
+    Uses block bboxes (``page.get_text("blocks")``) so we catch a bare
+    page number dropped in the header zone and skip body paragraphs
+    whose first line happens to contain a digit. Lines longer than 60
+    characters are discarded — they're almost certainly body text that
+    bled into the margin band, not a header/footer.
+    """
+    h = page.rect.height
+    top = h * _MARGIN_FRAC
+    bot = h * (1 - _MARGIN_FRAC)
+    lines: list[str] = []
+    try:
+        blocks = page.get_text("blocks") or []
+    except Exception:
+        return []
+    for b in blocks:
+        # blocks format: (x0, y0, x1, y1, text, block_no, block_type)
+        if len(b) < 5 or not isinstance(b[4], str):
+            continue
+        mid_y = (b[1] + b[3]) / 2
+        if top < mid_y < bot:
+            continue  # body zone
+        for raw in b[4].splitlines():
+            line = raw.strip()
+            if line and len(line) <= 60:
+                lines.append(line)
+    return lines
+
+
+def _has_labels(doc: fitz.Document) -> bool:
+    """True if the PDF has non-trivial embedded page labels.
+
+    "Trivial" means every present label is empty/None or a decimal
+    string that equals the physical index (``str(i)``) or physical
+    index + 1 (``str(i + 1)``). Such labels carry no information
+    beyond the physical page order — we'd rather auto-detect the real
+    printed numbering than use them. A PDF with any roman-numeral or
+    otherwise non-mechanical label is considered to have real labels
+    and auto-detection is skipped.
+    """
+    for i in range(doc.page_count):
+        try:
+            label = doc[i].get_label()
+        except Exception:
+            label = None
+        if not label:
+            continue
+        if label != str(i) and label != str(i + 1):
+            return True
+    return False
+
+
+def _detect_page_offset(doc: fitz.Document) -> tuple[int | None, str]:
+    """Heuristically detect ``printed_page - (physical_index + 1)``.
+
+    For each page, pulls integer candidates from header/footer text and
+    mode-votes the implied offset. Returns ``(offset, reason)``:
+
+    - ``(n, "detected")`` — confident enough to use ``n``.
+    - ``(None, "no_candidates")`` — no integer candidates on any page
+      (typical for fully scanned PDFs with no text layer).
+    - ``(None, "low_confidence")`` — candidates found but votes are
+      scattered; refusing to guess is safer than picking a plausible-
+      looking wrong offset.
+
+    Confidence gate: accept iff the winning offset is backed by a
+    majority of candidate-bearing pages, OR is backed by ≥5 pages with
+    the runner-up at most half the support. Noise candidates (years,
+    IP-address octets, footnote numbers) don't cluster at a single
+    offset, so mode voting naturally suppresses them.
+    """
+    n_pages = doc.page_count
+    # Plausibility bound: a printed page number shouldn't exceed ~2× the
+    # physical page count. Handles multi-volume PDFs (printed > physical)
+    # while still rejecting years embedded in the header.
+    max_page = max(n_pages * 2, 100)
+
+    votes: Counter[int] = Counter()
+    pages_with_candidates = 0
+    for i in range(n_pages):
+        cands: set[int] = set()
+        for line in _page_margin_lines(doc[i]):
+            for m in _PAGE_NUM_RE.finditer(line):
+                n = int(m.group(1))
+                if 1 <= n <= max_page:
+                    cands.add(n)
+        if not cands:
+            continue
+        pages_with_candidates += 1
+        # A page votes at most once per distinct implied offset; duplicate
+        # numerals on the same page can't reinforce a single vote.
+        for off in {n - (i + 1) for n in cands}:
+            votes[off] += 1
+
+    if not votes:
+        return None, "no_candidates"
+
+    ranked = votes.most_common(2)
+    offset, support = ranked[0]
+    runner_up = ranked[1][1] if len(ranked) > 1 else 0
+    confidence = support / max(pages_with_candidates, 1)
+    if confidence < 0.5 and (support < 5 or runner_up > support * 0.5):
+        return None, "low_confidence"
+    return offset, "detected"
+
+
+# ---------------------------------------------------------------------------
 # Markdown writer
 # ---------------------------------------------------------------------------
 
@@ -389,6 +515,7 @@ def _write_markdown(
     backend_label: str,
     langs: list[str],
     debug: bool = False,
+    use_pdf_labels: bool = True,
 ):
     doc = fitz.open(str(extract_pdf))
     label_doc = doc if label_pdf == extract_pdf else fitz.open(str(label_pdf))
@@ -406,9 +533,16 @@ def _write_markdown(
         for chunk in md_chunks:
             physical_idx = chunk["metadata"].get("page_number", 1) - 1
 
-            try:
-                current_label = label_doc[physical_idx].get_label()
-            except Exception:
+            # When auto-offset is in use, the embedded labels have
+            # already been deemed trivial (empty, or str(idx)/str(idx+1))
+            # and would only contribute off-by-one errors on top of the
+            # detected offset. Skip them entirely in that case.
+            if use_pdf_labels:
+                try:
+                    current_label = label_doc[physical_idx].get_label()
+                except Exception:
+                    current_label = None
+            else:
                 current_label = None
             if not current_label:
                 current_label = str(physical_idx + 1)
@@ -459,13 +593,47 @@ def _write_markdown(
 def convert_with_transition_markers(
     pdf_path: str,
     output_md_path: str,
-    page_offset: int = 0,
+    page_offset: int | None = None,
     force_ocr: bool = False,
     langs: list[str] | None = None,
     debug: bool = False,
 ):
     langs = langs or ["zh-Hant", "en-US"]
     src = Path(pdf_path)
+
+    # Resolve page_offset. ``None`` (the CLI default when --offset is
+    # omitted) triggers auto-detection from header/footer text; any
+    # explicit integer — including 0 — disables auto-detect and is
+    # applied as given. When the PDF has non-trivial embedded labels
+    # we trust them and skip detection entirely; trivial/absent labels
+    # are discarded downstream via ``use_pdf_labels=False`` so the
+    # detected offset isn't applied on top of misleading baseline
+    # numbering.
+    use_pdf_labels = True
+    if page_offset is None:
+        probe = fitz.open(str(src))
+        try:
+            if _has_labels(probe):
+                page_offset = 0
+            else:
+                use_pdf_labels = False
+                detected, reason = _detect_page_offset(probe)
+                if detected is not None:
+                    page_offset = detected
+                    print(
+                        f"[pdf2md] smart-offset={detected:+d} "
+                        f"(detected from header/footer; pass --offset N to override)",
+                        file=sys.stderr,
+                    )
+                else:
+                    page_offset = 0
+                    print(
+                        f"[pdf2md] smart-offset=none ({reason}; "
+                        f"using physical page numbers)",
+                        file=sys.stderr,
+                    )
+        finally:
+            probe.close()
 
     # macOS: Vision is cheap and per-page; no preprocessing needed.
     if IS_MACOS:
@@ -481,6 +649,7 @@ def convert_with_transition_markers(
             backend_label=backend,
             langs=langs,
             debug=debug,
+            use_pdf_labels=use_pdf_labels,
         )
         return
 
@@ -510,6 +679,7 @@ def convert_with_transition_markers(
             backend_label=backend,
             langs=langs,
             debug=debug,
+            use_pdf_labels=use_pdf_labels,
         )
         return
 
@@ -529,6 +699,7 @@ def convert_with_transition_markers(
             backend_label=backend,
             langs=langs,
             debug=debug,
+            use_pdf_labels=use_pdf_labels,
         )
 
 
@@ -543,8 +714,10 @@ if __name__ == "__main__":
     parser.add_argument("input", help="Input PDF path")
     parser.add_argument("output", help="Output Markdown path")
     parser.add_argument(
-        "--offset", type=int, default=0,
-        help="Page number offset (printed_page = physical + offset)",
+        "--offset", type=int, default=None,
+        help="Page number offset (printed_page = physical + offset). "
+             "Default: auto-detect from header/footer text. "
+             "Pass any explicit integer (including 0) to disable detection.",
     )
     parser.add_argument(
         "--force-ocr", action="store_true",
