@@ -518,72 +518,86 @@ def _write_markdown(
     use_pdf_labels: bool = True,
 ):
     doc = fitz.open(str(extract_pdf))
-    label_doc = doc if label_pdf == extract_pdf else fitz.open(str(label_pdf))
-    # use_ocr=False: prevent pymupdf4llm from silently invoking tesseract on
-    # pages where layout analysis can't find text. We want tier 1 to mean
-    # "text layer was present and readable", nothing else — any OCR happens
-    # explicitly at tier 3 (Vision on macOS, ocrmypdf elsewhere) so the tier
-    # annotation in the output reflects reality.
-    md_chunks = pymupdf4llm.to_markdown(doc, page_chunks=True, use_ocr=False)
+    # label_doc may alias doc (macOS / clean-Linux path) or be a separate
+    # handle on the pre-OCR original (Linux ocrmypdf path, where ocrmypdf
+    # can re-encode labels during preprocessing). Track ownership so the
+    # finally block only closes what we opened here.
+    if label_pdf == extract_pdf:
+        label_doc = doc
+        label_doc_owned = False
+    else:
+        label_doc = fitz.open(str(label_pdf))
+        label_doc_owned = True
+    try:
+        # use_ocr=False: prevent pymupdf4llm from silently invoking tesseract
+        # on pages where layout analysis can't find text. We want tier 1 to
+        # mean "text layer was present and readable", nothing else — any OCR
+        # happens explicitly at tier 3 (Vision on macOS, ocrmypdf elsewhere)
+        # so the tier annotation in the output reflects reality.
+        md_chunks = pymupdf4llm.to_markdown(doc, page_chunks=True, use_ocr=False)
 
-    with open(output_md, "w", encoding="utf-8") as f:
-        f.write(f"<!-- pdf2md: platform={sys.platform} ocr={backend_label} -->\n\n")
-        prev_label: str | None = None
+        with open(output_md, "w", encoding="utf-8") as f:
+            f.write(f"<!-- pdf2md: platform={sys.platform} ocr={backend_label} -->\n\n")
+            prev_label: str | None = None
 
-        for chunk in md_chunks:
-            physical_idx = chunk["metadata"].get("page_number", 1) - 1
+            for chunk in md_chunks:
+                physical_idx = chunk["metadata"].get("page_number", 1) - 1
 
-            # When auto-offset is in use, the embedded labels have
-            # already been deemed trivial (empty, or str(idx)/str(idx+1))
-            # and would only contribute off-by-one errors on top of the
-            # detected offset. Skip them entirely in that case.
-            if use_pdf_labels:
-                try:
-                    current_label = label_doc[physical_idx].get_label()
-                except Exception:
+                # When auto-offset is in use, the embedded labels have
+                # already been deemed trivial (empty, or str(idx)/str(idx+1))
+                # and would only contribute off-by-one errors on top of the
+                # detected offset. Skip them entirely in that case.
+                if use_pdf_labels:
+                    try:
+                        current_label = label_doc[physical_idx].get_label()
+                    except Exception:
+                        current_label = None
+                else:
                     current_label = None
-            else:
-                current_label = None
-            if not current_label:
-                current_label = str(physical_idx + 1)
+                if not current_label:
+                    current_label = str(physical_idx + 1)
 
-            if page_offset:
-                try:
-                    current_label = str(int(current_label) + page_offset)
-                except ValueError:
-                    pass  # non-numeric label (e.g. roman) — leave as-is
+                if page_offset:
+                    try:
+                        current_label = str(int(current_label) + page_offset)
+                    except ValueError:
+                        pass  # non-numeric label (e.g. roman) — leave as-is
 
-            if prev_label is None:
-                f.write(f"**[Page {current_label} start]**\n\n")
-            else:
-                f.write(
-                    f"\n\n**[Page {prev_label} end, "
-                    f"Page {current_label} start]**\n\n"
+                if prev_label is None:
+                    f.write(f"**[Page {current_label} start]**\n\n")
+                else:
+                    f.write(
+                        f"\n\n**[Page {prev_label} end, "
+                        f"Page {current_label} start]**\n\n"
+                    )
+
+                text, tier = _extract_page(
+                    doc,
+                    physical_idx,
+                    chunk.get("text", ""),
+                    per_page_ocr=per_page_ocr,
+                    force_ocr=force_ocr,
+                    langs=langs,
+                    debug=debug,
+                    debug_label=current_label,
                 )
 
-            text, tier = _extract_page(
-                doc,
-                physical_idx,
-                chunk.get("text", ""),
-                per_page_ocr=per_page_ocr,
-                force_ocr=force_ocr,
-                langs=langs,
-                debug=debug,
-                debug_label=current_label,
-            )
+                if tier != "pymupdf4llm":
+                    f.write(f"<!-- tier={tier} -->\n")
 
-            if tier != "pymupdf4llm":
-                f.write(f"<!-- tier={tier} -->\n")
+                if not text:
+                    f.write(f"*[WARNING: No text found on page {current_label}.]*\n")
+                else:
+                    f.write(text)
 
-            if not text:
-                f.write(f"*[WARNING: No text found on page {current_label}.]*\n")
-            else:
-                f.write(text)
+                prev_label = current_label
 
-            prev_label = current_label
-
-        if prev_label is not None:
-            f.write(f"\n\n**[Page {prev_label} end]**\n")
+            if prev_label is not None:
+                f.write(f"\n\n**[Page {prev_label} end]**\n")
+    finally:
+        if label_doc_owned:
+            label_doc.close()
+        doc.close()
 
 
 # ---------------------------------------------------------------------------
