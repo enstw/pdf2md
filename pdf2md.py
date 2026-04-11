@@ -29,8 +29,10 @@ import re
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Literal, NamedTuple
 
 import fitz
 import pymupdf4llm
@@ -50,13 +52,10 @@ _SCRIPT_RANGES: dict[str, list[tuple[int, int]]] = {
 }
 
 
-class _Language:
+class _Language(NamedTuple):
     """One BCP-47 language: tesseract code + script families it uses."""
-    __slots__ = ("tesseract", "scripts")
-
-    def __init__(self, tesseract: str, scripts: tuple[str, ...]):
-        self.tesseract = tesseract
-        self.scripts = scripts
+    tesseract: str
+    scripts: tuple[str, ...]
 
 
 # Single source of truth for every supported language. Keyed by exact
@@ -257,16 +256,55 @@ def _ocrmypdf_preprocess(src: Path, langs: list[str], force_ocr: bool):
 # Tiered per-page extraction
 # ---------------------------------------------------------------------------
 
+# Tier values emitted in the output markdown as ``<!-- tier=... -->``.
+# These strings are part of the output contract (see AGENTS.md) — any
+# new tier must be added here AND in the _CLEAN_TIERS set below if it
+# represents a successful extraction.
+Tier = Literal[
+    "pymupdf4llm",
+    "pymupdf",
+    "ocr",
+    "fallback:pymupdf4llm",
+    "fallback:pymupdf",
+    "empty",
+]
+
+_CLEAN_TIERS: frozenset[Tier] = frozenset({"pymupdf4llm", "pymupdf"})
+
+
+class _TierTrace:
+    """Collects per-tier decisions for one page and emits them on completion.
+
+    When ``enabled`` is false every method is a no-op, so callers in
+    :func:`_extract_page` can invoke ``note``/``emit`` unconditionally
+    without paying a cost in the common (non-debug) case.
+    """
+
+    def __init__(self, enabled: bool, label: str):
+        self.enabled = enabled
+        self.label = label
+        self.entries: list[str] = []
+
+    def note(self, stage: str, text: str, verdict: str) -> None:
+        if self.enabled:
+            self.entries.append(f"{stage}(len={len(text)}) {verdict}")
+
+    def emit(self, tier: Tier) -> None:
+        if self.enabled:
+            line = " | ".join(self.entries) + f" → tier={tier}"
+            print(f"[pdf2md:debug p={self.label}] {line}", file=sys.stderr)
+
+
 def _extract_page(
     doc: fitz.Document,
     physical_idx: int,
     md_text: str,
-    per_page_ocr,  # callable(fitz.Page) -> str, or None
+    per_page_ocr: Callable[[fitz.Page], str] | None,
     force_ocr: bool,
     langs: list[str],
     debug: bool = False,
     debug_label: str = "",
-) -> tuple[str, str]:
+) -> tuple[str, Tier]:
     """Return (text, tier) for one page.
 
     Tier values:
@@ -286,16 +324,7 @@ def _extract_page(
     that was considered and the tier that ultimately won. Use
     ``debug_label`` to give each line a human-readable page identifier.
     """
-    trace: list[str] = []
-
-    def _note(stage: str, text: str, verdict: str) -> None:
-        if debug:
-            trace.append(f"{stage}(len={len(text)}) {verdict}")
-
-    def _emit(tier: str) -> None:
-        if debug:
-            line = " | ".join(trace) + f" → tier={tier}"
-            print(f"[pdf2md:debug p={debug_label}] {line}", file=sys.stderr)
+    trace = _TierTrace(debug, debug_label)
 
     # Always collect both text-layer variants up front: even in force_ocr
     # mode they're kept as last-resort fallbacks if OCR itself fails.
@@ -305,32 +334,32 @@ def _extract_page(
     if not force_ocr:
         # Tier 1: pymupdf4llm
         gib1, reason1 = _classify_text(t1, langs) if t1 else (True, "empty")
-        _note("t1", t1, f"reject:{reason1}" if gib1 else f"accept:{reason1}")
+        trace.note("t1", t1, f"reject:{reason1}" if gib1 else f"accept:{reason1}")
         if t1 and not gib1:
-            _emit("pymupdf4llm")
+            trace.emit("pymupdf4llm")
             return t1, "pymupdf4llm"
 
         # Tier 2: raw pymupdf text
         gib2, reason2 = _classify_text(t2, langs) if t2 else (True, "empty")
-        _note("t2", t2, f"reject:{reason2}" if gib2 else f"accept:{reason2}")
+        trace.note("t2", t2, f"reject:{reason2}" if gib2 else f"accept:{reason2}")
         if t2 and not gib2:
-            _emit("pymupdf")
+            trace.emit("pymupdf")
             return t2, "pymupdf"
     else:
-        _note("t1", t1, "skipped:force_ocr")
-        _note("t2", t2, "skipped:force_ocr")
+        trace.note("t1", t1, "skipped:force_ocr")
+        trace.note("t2", t2, "skipped:force_ocr")
 
     # Tier 3: OCR
     if per_page_ocr is not None:
         try:
             ocr_text = (per_page_ocr(doc[physical_idx]) or "").strip()
             if ocr_text:
-                _note("ocr", ocr_text, "accept")
-                _emit("ocr")
+                trace.note("ocr", ocr_text, "accept")
+                trace.emit("ocr")
                 return ocr_text, "ocr"
-            _note("ocr", ocr_text, "reject:empty")
+            trace.note("ocr", ocr_text, "reject:empty")
         except Exception as e:
-            _note("ocr", "", f"error:{type(e).__name__}")
+            trace.note("ocr", "", f"error:{type(e).__name__}")
             print(
                 f"  - OCR failed on page index {physical_idx}: {e}",
                 file=sys.stderr,
@@ -341,16 +370,13 @@ def _extract_page(
     # difference between "tier 1 was clean" and "tier 1 was gibberish
     # and we gave up and returned it anyway."
     if t1:
-        _emit("fallback:pymupdf4llm")
+        trace.emit("fallback:pymupdf4llm")
         return t1, "fallback:pymupdf4llm"
     if t2:
-        _emit("fallback:pymupdf")
+        trace.emit("fallback:pymupdf")
         return t2, "fallback:pymupdf"
-    _emit("empty")
+    trace.emit("empty")
     return "", "empty"
-
-
-_CLEAN_TIERS = frozenset({"pymupdf4llm", "pymupdf"})
 
 
 def _needs_ocr_scan(
@@ -524,7 +550,7 @@ def _write_markdown(
     output_md: str,
     page_offset: int,
     force_ocr: bool,
-    per_page_ocr,  # callable(fitz.Page) -> str, or None
+    per_page_ocr: Callable[[fitz.Page], str] | None,
     backend_label: str,
     langs: list[str],
     debug: bool = False,
@@ -617,7 +643,7 @@ def _write_markdown(
 # Top-level dispatch
 # ---------------------------------------------------------------------------
 
-def convert_with_transition_markers(
+def convert(
     pdf_path: str,
     output_md_path: str,
     page_offset: int | None = None,
@@ -762,7 +788,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     lang_list = [lg.strip() for lg in args.langs.split(",") if lg.strip()]
 
-    convert_with_transition_markers(
+    convert(
         args.input,
         args.output,
         page_offset=args.offset,
