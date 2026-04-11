@@ -81,6 +81,16 @@ up with the user before investing in any of them.
   running `--force-ocr` against the scanned Chinese fixture is a
   useful ad-hoc smoke test.
 
+- **Smart-offset detection is text-layer only.** `_detect_page_offset`
+  reads header/footer text via `page.get_text("blocks")`, so it
+  refuses on fully scanned PDFs with no text layer (returning
+  `no_candidates`). Adding OCR-backed margin extraction — Vision on
+  the top/bottom 15% strip of each page — would let it work on
+  scanned books at ~10% of full-page OCR cost. Also: no Roman-numeral
+  front matter handling; front-matter pages currently inherit the
+  detected Arabic offset, producing negative labels on books with
+  deep front matter. Both are acknowledged gaps, not bugs.
+
 - **Tier 2 (raw `page.get_text()`) loses layout.** For JSTOR-style
   scans with hidden text layers, we drop all heading/italic structure.
   An improvement path is to coax `pymupdf4llm` into reading hidden

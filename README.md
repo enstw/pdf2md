@@ -31,10 +31,10 @@ you can audit where the extractor fell back.
 ## Usage
 
 ```bash
-# Basic
+# Basic — page offset is auto-detected from the header/footer
 ./pdf2md.py input.pdf output.md
 
-# Book with printed page 1 on the 275th physical page
+# Override auto-detection: book with printed page 1 on the 275th physical page
 ./pdf2md.py input.pdf output.md --offset 274
 
 # Force OCR on every page (ignore existing text layer)
@@ -45,6 +45,14 @@ you can audit where the extractor fell back.
 ```
 
 Default languages: `zh-Hant,en-US`.
+
+When `--offset` is omitted, `pdf2md` scans the header/footer zone of every
+page, extracts integer candidates, and mode-votes the most likely
+`printed_page − physical_index` offset. The detector refuses to guess when
+candidates are scattered or the PDF has no text layer, falling back to
+physical page numbers. Pass any explicit `--offset N` (including `0`) to
+disable auto-detection. When detection fires, the chosen offset is logged
+to stderr as `[pdf2md] smart-offset=+N (...)` so it's auditable.
 
 The `--langs` flag does two things: it tells the OCR backend what
 scripts to expect (Vision recognition languages on macOS; tesseract
