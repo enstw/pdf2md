@@ -447,6 +447,28 @@ def _has_labels(doc: fitz.Document) -> bool:
     return False
 
 
+def _score_offset_votes(
+    votes: Counter[int], pages_with_candidates: int
+) -> tuple[int | None, str]:
+    """Apply the confidence gate to collected offset votes.
+
+    Pure helper split out of :func:`_detect_page_offset` so the decision
+    thresholds can be unit-tested with hand-built inputs. See that
+    function's docstring for the semantics of the return value and the
+    gate itself.
+    """
+    if not votes:
+        return None, "no_candidates"
+
+    ranked = votes.most_common(2)
+    offset, support = ranked[0]
+    runner_up = ranked[1][1] if len(ranked) > 1 else 0
+    confidence = support / pages_with_candidates
+    if confidence < 0.5 and (support < 5 or runner_up > support * 0.5):
+        return None, "low_confidence"
+    return offset, "detected"
+
+
 def _detect_page_offset(doc: fitz.Document) -> tuple[int | None, str]:
     """Heuristically detect ``printed_page - (physical_index + 1)``.
 
@@ -489,16 +511,7 @@ def _detect_page_offset(doc: fitz.Document) -> tuple[int | None, str]:
         for off in {n - (i + 1) for n in cands}:
             votes[off] += 1
 
-    if not votes:
-        return None, "no_candidates"
-
-    ranked = votes.most_common(2)
-    offset, support = ranked[0]
-    runner_up = ranked[1][1] if len(ranked) > 1 else 0
-    confidence = support / max(pages_with_candidates, 1)
-    if confidence < 0.5 and (support < 5 or runner_up > support * 0.5):
-        return None, "low_confidence"
-    return offset, "detected"
+    return _score_offset_votes(votes, pages_with_candidates)
 
 
 # ---------------------------------------------------------------------------
