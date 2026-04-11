@@ -80,11 +80,15 @@ def run_case(case: dict, keep: bool) -> tuple[bool, list[str]]:
     out_md = out_dir / f"{case['name']}.md"
 
     t0 = time.monotonic()
-    proc = subprocess.run(
-        [str(PDF2MD), str(pdf), str(out_md)],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            [str(PDF2MD), str(pdf), str(out_md)],
+            capture_output=True,
+            text=True,
+            timeout=300,  # Chinese-OCR case is the slowest at ~15s
+        )
+    except subprocess.TimeoutExpired:
+        return False, [f"pdf2md.py timed out after 300s on {pdf.name}"]
     elapsed = time.monotonic() - t0
 
     if proc.returncode != 0:
