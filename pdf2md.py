@@ -89,8 +89,10 @@ def _script_ranges_for_langs(langs: list[str]) -> list[tuple[int, int]]:
     return ranges
 
 
-def is_mostly_gibberish(text: str, langs: list[str] | None = None) -> bool:
-    """Return True iff ``text`` is too unlike any expected script to trust.
+def _classify_text(
+    text: str, langs: list[str] | None = None
+) -> tuple[bool, str]:
+    """Return ``(is_gibberish, reason)`` for ``text``.
 
     Rejects in order:
 
@@ -106,24 +108,28 @@ def is_mostly_gibberish(text: str, langs: list[str] | None = None) -> bool:
        Hangul for ko, Cyrillic for ru). A text is gibberish iff *none*
        of the expected scripts cover at least 20% of non-whitespace
        characters.
+
+    ``reason`` is a short tag suitable for debug logging
+    (``"empty"``, ``"short_markdown"``, ``"short_ok"``, ``"no_langs"``,
+    ``"script_match"``, ``"script_mismatch"``).
     """
     if not text:
-        return True
+        return True, "empty"
     non_ws = [c for c in text if not c.isspace()]
     total = len(non_ws)
     if total == 0:
-        return True
+        return True, "empty"
 
     alnum = sum(1 for c in non_ws if c.isalnum())
     if alnum < 5:
-        return True
+        return True, "short_markdown"
 
     if total < 50:
-        return False
+        return False, "short_ok"
 
     ranges = _script_ranges_for_langs(langs or [])
     if not ranges:
-        return False
+        return False, "no_langs"
 
     hits = 0
     for c in non_ws:
@@ -132,7 +138,16 @@ def is_mostly_gibberish(text: str, langs: list[str] | None = None) -> bool:
             if lo <= o <= hi:
                 hits += 1
                 break
-    return hits / total < 0.2
+    ratio = hits / total
+    if ratio < 0.2:
+        return True, f"script_mismatch({ratio:.0%})"
+    return False, f"script_match({ratio:.0%})"
+
+
+def is_mostly_gibberish(text: str, langs: list[str] | None = None) -> bool:
+    """Thin boolean wrapper around :func:`_classify_text` for callers that
+    don't care about the reason."""
+    return _classify_text(text, langs)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -217,29 +232,62 @@ def _extract_page(
     per_page_ocr,  # callable(fitz.Page) -> str, or None
     force_ocr: bool,
     langs: list[str],
+    debug: bool = False,
+    debug_label: str = "",
 ) -> tuple[str, str]:
-    """Return (text, tier) for one page. Tier ∈ {pymupdf4llm, pymupdf, ocr, empty}."""
+    """Return (text, tier) for one page. Tier ∈ {pymupdf4llm, pymupdf, ocr, empty}.
+
+    When ``debug`` is true, a single line of diagnostics is written to
+    stderr showing the length and accept/reject reason for each tier
+    that was considered and the tier that ultimately won. Use
+    ``debug_label`` to give each line a human-readable page identifier.
+    """
+    trace: list[str] = []
+
+    def _note(stage: str, text: str, verdict: str) -> None:
+        if debug:
+            trace.append(f"{stage}(len={len(text)}) {verdict}")
+
+    def _emit(tier: str) -> None:
+        if debug:
+            line = " | ".join(trace) + f" → tier={tier}"
+            print(f"[pdf2md:debug p={debug_label}] {line}", file=sys.stderr)
+
     if not force_ocr:
         # Tier 1: pymupdf4llm
         t1 = (md_text or "").strip()
-        if t1 and not is_mostly_gibberish(t1, langs):
+        gib1, reason1 = _classify_text(t1, langs) if t1 else (True, "empty")
+        _note("t1", t1, f"reject:{reason1}" if gib1 else f"accept:{reason1}")
+        if t1 and not gib1:
+            _emit("pymupdf4llm")
             return t1, "pymupdf4llm"
 
         # Tier 2: raw pymupdf text
         t2 = (doc[physical_idx].get_text() or "").strip()
-        if t2 and not is_mostly_gibberish(t2, langs):
+        gib2, reason2 = _classify_text(t2, langs) if t2 else (True, "empty")
+        _note("t2", t2, f"reject:{reason2}" if gib2 else f"accept:{reason2}")
+        if t2 and not gib2:
+            _emit("pymupdf")
             return t2, "pymupdf"
     else:
+        # force_ocr: skip tiers 1-2 but keep the strings around as a
+        # last-resort fallback if OCR itself fails.
         t1 = (md_text or "").strip()
         t2 = (doc[physical_idx].get_text() or "").strip()
+        _note("t1", t1, "skipped:force_ocr")
+        _note("t2", t2, "skipped:force_ocr")
 
     # Tier 3: OCR
     if per_page_ocr is not None:
         try:
             ocr_text = (per_page_ocr(doc[physical_idx]) or "").strip()
             if ocr_text:
+                _note("ocr", ocr_text, "accept")
+                _emit("ocr")
                 return ocr_text, "ocr"
+            _note("ocr", ocr_text, "reject:empty")
         except Exception as e:
+            _note("ocr", "", f"error:{type(e).__name__}")
             print(
                 f"  - OCR failed on page index {physical_idx}: {e}",
                 file=sys.stderr,
@@ -248,8 +296,10 @@ def _extract_page(
     # Nothing worked cleanly. Return whatever non-empty text we've got, or
     # an empty string if the page is truly blank.
     fallback = t1 or t2
-    return fallback, ("pymupdf4llm" if fallback == t1 and t1 else
-                      "pymupdf" if fallback else "empty")
+    tier = ("pymupdf4llm" if fallback == t1 and t1 else
+            "pymupdf" if fallback else "empty")
+    _emit(f"{tier}(fallback)")
+    return fallback, tier
 
 
 def _needs_ocr_scan(
@@ -280,6 +330,7 @@ def _write_markdown(
     per_page_ocr,  # callable(fitz.Page) -> str, or None
     backend_label: str,
     langs: list[str],
+    debug: bool = False,
 ):
     doc = fitz.open(str(extract_pdf))
     label_doc = doc if label_pdf == extract_pdf else fitz.open(str(label_pdf))
@@ -325,6 +376,8 @@ def _write_markdown(
                 per_page_ocr=per_page_ocr,
                 force_ocr=force_ocr,
                 langs=langs,
+                debug=debug,
+                debug_label=current_label,
             )
 
             if tier != "pymupdf4llm":
@@ -351,6 +404,7 @@ def convert_with_transition_markers(
     page_offset: int = 0,
     force_ocr: bool = False,
     langs: list[str] | None = None,
+    debug: bool = False,
 ):
     langs = langs or ["zh-Hant", "en-US"]
     src = Path(pdf_path)
@@ -368,6 +422,7 @@ def convert_with_transition_markers(
             per_page_ocr=lambda page: _ocr_page_vision(page, langs),
             backend_label=backend,
             langs=langs,
+            debug=debug,
         )
         return
 
@@ -396,6 +451,7 @@ def convert_with_transition_markers(
             per_page_ocr=None,
             backend_label=backend,
             langs=langs,
+            debug=debug,
         )
         return
 
@@ -414,6 +470,7 @@ def convert_with_transition_markers(
             per_page_ocr=None,
             backend_label=backend,
             langs=langs,
+            debug=debug,
         )
 
 
@@ -439,6 +496,10 @@ if __name__ == "__main__":
         "--langs", default="zh-Hant,en-US",
         help="Comma-separated BCP-47 language codes (default: zh-Hant,en-US)",
     )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Stream per-page tier decisions to stderr (diagnostic).",
+    )
 
     args = parser.parse_args()
     lang_list = [lg.strip() for lg in args.langs.split(",") if lg.strip()]
@@ -449,4 +510,5 @@ if __name__ == "__main__":
         page_offset=args.offset,
         force_ocr=args.force_ocr,
         langs=lang_list,
+        debug=args.debug,
     )
