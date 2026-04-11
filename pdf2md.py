@@ -348,17 +348,29 @@ def _extract_page(
     return "", "empty"
 
 
+_CLEAN_TIERS = frozenset({"pymupdf4llm", "pymupdf"})
+
+
 def _needs_ocr_scan(
     doc: fitz.Document, md_chunks: list[dict], langs: list[str]
 ) -> bool:
-    """Do any pages fail both tier 1 and tier 2? (Pre-OCR scan.)"""
+    """Do any pages fail both tier 1 and tier 2? (Pre-OCR scan.)
+
+    Delegates to :func:`_extract_page` with ``per_page_ocr=None`` so the
+    tier thresholds stay in exactly one place — if every chunk comes
+    back with a clean tier, OCR isn't needed.
+    """
     for chunk in md_chunks:
         idx = chunk["metadata"].get("page_number", 1) - 1
-        t1 = (chunk.get("text") or "").strip()
-        if t1 and not is_mostly_gibberish(t1, langs):
-            continue
-        t2 = (doc[idx].get_text() or "").strip()
-        if not t2 or is_mostly_gibberish(t2, langs):
+        _text, tier = _extract_page(
+            doc,
+            idx,
+            chunk.get("text", ""),
+            per_page_ocr=None,
+            force_ocr=False,
+            langs=langs,
+        )
+        if tier not in _CLEAN_TIERS:
             return True
     return False
 
