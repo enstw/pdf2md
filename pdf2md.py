@@ -35,53 +35,77 @@ import pymupdf4llm
 
 IS_MACOS = sys.platform == "darwin"
 
-# BCP-47 (Vision) → ISO 639-3 (tesseract). Extend as needed.
-_TESSERACT_LANG = {
-    "zh-Hant": "chi_tra",
-    "zh-Hans": "chi_sim",
-    "en-US": "eng",
-    "en-GB": "eng",
-    "ja-JP": "jpn",
-    "ko-KR": "kor",
-    "fr-FR": "fra",
-    "de-DE": "deu",
-    "es-ES": "spa",
-    "it-IT": "ita",
-    "pt-BR": "por",
-    "ru-RU": "rus",
-}
-
-
 # Unicode ranges per script family. Latin covers ASCII letters +
 # Latin-1 Supplement + Latin Extended A/B (enough for most European
 # languages). CJK ranges cover Unified Ideographs + Extension A +
 # Compatibility Ideographs (Preview sometimes emits the latter).
 _SCRIPT_RANGES: dict[str, list[tuple[int, int]]] = {
-    "latin": [(0x0041, 0x005A), (0x0061, 0x007A), (0x00C0, 0x024F)],
-    "cjk":   [(0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0xF900, 0xFAFF)],
-    "kana":  [(0x3040, 0x309F), (0x30A0, 0x30FF)],
-    "hangul": [(0xAC00, 0xD7AF)],
+    "latin":    [(0x0041, 0x005A), (0x0061, 0x007A), (0x00C0, 0x024F)],
+    "cjk":      [(0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0xF900, 0xFAFF)],
+    "kana":     [(0x3040, 0x309F), (0x30A0, 0x30FF)],
+    "hangul":   [(0xAC00, 0xD7AF)],
     "cyrillic": [(0x0400, 0x04FF)],
 }
 
-# BCP-47 language prefix → list of _SCRIPT_RANGES keys.
-_LANG_SCRIPTS: dict[str, list[str]] = {
-    "zh": ["cjk"],
-    "ja": ["cjk", "kana"],
-    "ko": ["hangul", "cjk"],
-    "ru": ["cyrillic"],
-    "en": ["latin"], "fr": ["latin"], "de": ["latin"], "es": ["latin"],
-    "it": ["latin"], "pt": ["latin"], "nl": ["latin"], "sv": ["latin"],
-    "pl": ["latin"], "tr": ["latin"],
+
+class _Language:
+    """One BCP-47 language: tesseract code + script families it uses."""
+    __slots__ = ("tesseract", "scripts")
+
+    def __init__(self, tesseract: str, scripts: tuple[str, ...]):
+        self.tesseract = tesseract
+        self.scripts = scripts
+
+
+# Single source of truth for every supported language. Keyed by exact
+# BCP-47 code (what Vision uses); prefix fallback below handles
+# unqualified codes like "en" or "zh". When adding a language, add
+# one row here — no second table to keep in sync.
+LANGUAGES: dict[str, _Language] = {
+    "zh-Hant": _Language("chi_tra", ("cjk",)),
+    "zh-Hans": _Language("chi_sim", ("cjk",)),
+    "en-US":   _Language("eng",     ("latin",)),
+    "en-GB":   _Language("eng",     ("latin",)),
+    "ja-JP":   _Language("jpn",     ("cjk", "kana")),
+    "ko-KR":   _Language("kor",     ("hangul", "cjk")),
+    "fr-FR":   _Language("fra",     ("latin",)),
+    "de-DE":   _Language("deu",     ("latin",)),
+    "es-ES":   _Language("spa",     ("latin",)),
+    "it-IT":   _Language("ita",     ("latin",)),
+    "pt-BR":   _Language("por",     ("latin",)),
+    "ru-RU":   _Language("rus",     ("cyrillic",)),
 }
+
+
+def _lookup_language(code: str) -> _Language | None:
+    """Resolve a BCP-47 code to a :class:`_Language`.
+
+    Exact match first, then prefix fallback: ``"en"`` → ``en-US``,
+    ``"zh"`` → first ``zh-*`` entry. Returns ``None`` for unknown codes.
+    """
+    if code in LANGUAGES:
+        return LANGUAGES[code]
+    prefix = code.split("-", 1)[0].lower() + "-"
+    for key, lang in LANGUAGES.items():
+        if key.lower().startswith(prefix):
+            return lang
+    return None
+
+
+def _tesseract_code(lg: str) -> str:
+    """Tesseract language code for a BCP-47 code, with identity fallback."""
+    lang = _lookup_language(lg)
+    return lang.tesseract if lang else lg
 
 
 def _script_ranges_for_langs(langs: list[str]) -> list[tuple[int, int]]:
     seen: set[str] = set()
     ranges: list[tuple[int, int]] = []
     for lg in langs:
-        prefix = lg.split("-", 1)[0].lower()
-        for key in _LANG_SCRIPTS.get(prefix, []):
+        lang = _lookup_language(lg)
+        if lang is None:
+            continue
+        for key in lang.scripts:
             if key in seen:
                 continue
             seen.add(key)
@@ -192,7 +216,7 @@ def _ocrmypdf_preprocess(src: Path, langs: list[str], force_ocr: bool):
     """
     import ocrmypdf
 
-    tess_langs = "+".join(_TESSERACT_LANG.get(lg, lg) for lg in langs)
+    tess_langs = "+".join(_tesseract_code(lg) for lg in langs)
     with tempfile.TemporaryDirectory(prefix="pdf2md_ocrmypdf_") as tmp:
         out = Path(tmp) / f"{src.stem}.ocr.pdf"
         kwargs: dict = dict(
