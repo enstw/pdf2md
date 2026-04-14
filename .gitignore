@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 .DS_Store
 *.swp
+
+# User transcription workspace — keep the folder, ignore contents.
+refs/*
+!refs/README.md
