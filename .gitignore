@@ -6,5 +6,5 @@ __pycache__/
 *.swp
 
 # User transcription workspace — keep the folder, ignore contents.
-refs/*
-!refs/README.md
+workspace/*
+!workspace/README.txt

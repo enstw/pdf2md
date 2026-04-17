@@ -1,6 +1,6 @@
-# refs-transcription-protocol.md
+# workspace-transcription-protocol.md
 
-Protocol for transcribing reference materials in `refs/` to Markdown so
+Protocol for transcribing reference materials in `workspace/` to Markdown so
 that citation locators (`p.`, `pp.`, `para.`) can be verified during
 writing without re-rendering PDFs on every lookup.
 
@@ -24,18 +24,18 @@ tier. Vision is reserved for PDFs that genuinely need it.
 
 **Paper-branch startup** — when the agent starts work on a paper
 branch, after reading `PROGRESS.md` but **before** any writing,
-bulk-convert every `refs/*.pdf` that has no matching `refs/<name>.md`.
+bulk-convert every `workspace/*.pdf` that has no matching `workspace/<name>.md`.
 Pay the vision cost once (only on the PDFs that need it) so every
 later citation lookup is a cheap plaintext read.
 
 ## Per-PDF procedure
 
 1. **Pick the output name.** Use the PDF stem:
-   `refs/<pdf-basename>.md`.
+   `workspace/<pdf-basename>.md`.
 
 2. **Run `./pdf2md.py` (default path).**
    ```
-   ./pdf2md.py refs/<pdf>.pdf refs/<name>.md
+   ./pdf2md.py workspace/<pdf>.pdf workspace/<name>.md
    ```
    `pdf2md.py` is a PEP 723 single-file script — the shebang invokes
    it with `uv run --script`, so dependencies are resolved in a
@@ -60,7 +60,7 @@ later citation lookup is a cheap plaintext read.
      last content page. Skip covers and blank versos.
    - Spawn one `general-purpose` subagent. It `Read`s those three
      pages from the PDF, reads the corresponding page spans in
-     `refs/<name>.md`, and returns one of:
+     `workspace/<name>.md`, and returns one of:
      - `PASS` — downstream AI can recover the printed text from the
        `.md` (minor whitespace/ligature noise OK, tables as fences
        OK, Chinese punctuation variance OK).
@@ -70,9 +70,9 @@ later citation lookup is a cheap plaintext read.
    - The subagent returns only the verdict + reason to the parent.
      Transcribed content never enters parent context.
 
-4. **If PASS, stop.** Commit `refs/<name>.md`. Done.
+4. **If PASS, stop.** Commit `workspace/<name>.md`. Done.
 
-5. **If FAIL, fall back to vision.** Delete `refs/<name>.md` and run
+5. **If FAIL, fall back to vision.** Delete `workspace/<name>.md` and run
    the [Vision fan-out fallback](#vision-fan-out-fallback) below.
 
 6. **Spot-check the final output** (regardless of which path
@@ -86,7 +86,7 @@ later citation lookup is a cheap plaintext read.
 ## Vision fan-out fallback
 
 Only runs when step 3 returned FAIL. Produces the same
-`refs/<name>.md` format as `pdf2md.py` (same page-marker convention)
+`workspace/<name>.md` format as `pdf2md.py` (same page-marker convention)
 so downstream consumers don't care which path ran.
 
 1. **Fan out to parallel subagents, 3 pages per subagent.**
@@ -95,7 +95,7 @@ so downstream consumers don't care which path ran.
      one contiguous 3-page range (the last one may be 1–3 pages).
    - Each subagent calls `Read pages:"X-Y"` once for its 3-page
      range, transcribes all 3 pages, then issues 3 separate
-     `Write refs/<name>/pNNNN.md` calls — one per printed page,
+     `Write workspace/<name>/pNNNN.md` calls — one per printed page,
      4-digit zero-padded (`p0001.md`, `p0275.md`).
    - Per-page `Write`s preserve save-points (a subagent that dies
      mid-range still leaves completed pages on disk) while the
@@ -106,7 +106,7 @@ so downstream consumers don't care which path ran.
    - Rationale: benchmarked against sequential per-page and
      per-20-page variants on a 31-page PDF, 3p × parallel finished
      in ~1.6 min vs. ~10.6 min (per-20-page) and ~16.5 min
-     (per-page). See `refs-transcription-benchmark.md`.
+     (per-page). See `workspace-transcription-benchmark.md`.
 
 2. **Transcribe each page as Markdown**, preserving:
    - Headings and subheadings
@@ -134,10 +134,10 @@ so downstream consumers don't care which path ran.
 
 4. **After the last page, combine.** Run:
    ```
-   ./scripts/combine-ref-pages.sh "<name>"
+   ./scripts/combine-workspace-pages.sh "<name>"
    ```
-   This concatenates `refs/<name>/p*.md` (lexical = numeric because
-   of zero-padding) into `refs/<name>.md` and removes the per-page
+   This concatenates `workspace/<name>/p*.md` (lexical = numeric because
+   of zero-padding) into `workspace/<name>.md` and removes the per-page
    directory.
 
 ## Edge cases
@@ -151,21 +151,21 @@ so downstream consumers don't care which path ran.
 - **Mixed-language document**: transcribe in the original language
   exactly as printed. Do not translate.
 - **Non-PDF source** (DOCX, HTML save, EPUB): fetch the fulltext
-  through the appropriate tool and save to `refs/<name>.md`
+  through the appropriate tool and save to `workspace/<name>.md`
   preserving paragraph structure. Page markers don't apply unless
   the source has them.
 
 ## Bulk-convert on paper-branch startup
 
 ```
-1. List refs/*.pdf
+1. List workspace/*.pdf
 2. For each PDF:
      - Determine output name (PDF stem)
-     - If refs/<name>.md already exists and is non-empty, skip
+     - If workspace/<name>.md already exists and is non-empty, skip
      - Otherwise run the per-PDF procedure above (pdf2md.py →
        quality check → vision fallback if needed)
 3. Commit the new .md files alongside the PDFs in a single commit
-   with message like `refs: transcribe N PDFs before writing`
+   with message like `workspace: transcribe N PDFs before writing`
 ```
 
 Do not start writing paper content until this step is complete.
@@ -187,5 +187,5 @@ entirely. For a thesis with 30+ references this is the difference
 between a writing session that fits in context and one that doesn't.
 
 The hybrid flow keeps the common case (clean PDFs) on the cheap
-`pdf2md.py` path and only pays vision tokens for the refs that
+`pdf2md.py` path and only pays vision tokens for the sources that
 actually need them.

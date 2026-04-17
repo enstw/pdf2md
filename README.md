@@ -109,15 +109,15 @@ For a structured workflow that uses `pdf2md.py` as the cheap default
 path and falls back to Claude Code vision (via parallel subagent
 fan-out) on PDFs where the text layer isn't recoverable, see:
 
-- [`refs-transcription-protocol.md`](refs-transcription-protocol.md)
+- [`workspace-transcription-protocol.md`](workspace-transcription-protocol.md)
   — per-PDF procedure, quality check, vision fan-out fallback, page
   marker conventions.
-- [`refs-transcription-benchmark.md`](refs-transcription-benchmark.md)
+- [`workspace-transcription-benchmark.md`](workspace-transcription-benchmark.md)
   — decision record behind the 3p × parallel fan-out default
   (sequential vs. parallel variants benchmarked on a 31-page PDF).
 
-The accompanying `scripts/combine-ref-pages.sh` concatenates per-page
-markdown produced by the vision fallback into a single `refs/<name>.md`.
+The accompanying `scripts/combine-workspace-pages.sh` concatenates per-page
+markdown produced by the vision fallback into a single `workspace/<name>.md`.
 
 ## License
 

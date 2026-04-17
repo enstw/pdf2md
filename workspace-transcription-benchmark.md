@@ -1,7 +1,7 @@
-# refs-transcription-benchmark.md
+# workspace-transcription-benchmark.md
 
 > **Status (2026-04-14):** resolved. **3p × parallel fan-out** adopted
-> as the default in `refs-transcription-protocol.md`. This file is
+> as the default in `workspace-transcription-protocol.md`. This file is
 > retained as a decision record and raw-data archive in case the
 > protocol needs to be re-benchmarked.
 
@@ -13,7 +13,7 @@ many parallel short-running subagents do the work.
 
 ## Test subject
 
-- PDF: `refs/09-10 美日安保與亞太安全.pdf`
+- PDF: `workspace/09-10 美日安保與亞太安全.pdf`
 - 31 physical pages, printed pp. 275–305
 - 楊永明, "美日安保與亞太安全", 政治科學論叢 第九期 (1998)
 - Mixed Chinese body with Japanese footnote titles
@@ -21,22 +21,22 @@ many parallel short-running subagents do the work.
 ## Variants
 
 **A. Per-page** — subagent loops over physical pages 2–31, each
-iteration is one `Read pages:"K"` + one `Write refs/<name>/pNNN.md`.
-Aggregated afterwards by `scripts/combine-ref-pages.sh`.
+iteration is one `Read pages:"K"` + one `Write workspace/<name>/pNNN.md`.
+Aggregated afterwards by `scripts/combine-workspace-pages.sh`.
 
 **B. Per-20-pages** — subagent calls `Read pages:"1-20"`, then
 `Read pages:"21-31"`, holds the full transcription in working memory,
-writes the whole book with one `Write refs/<name>.md`. (Not "whole book
+writes the whole book with one `Write workspace/<name>.md`. (Not "whole book
 in one Read" — the `Read` tool caps at 20 pages per call, so even the
 maximal-batch variant needs ⌈pages/20⌉ reads.)
 
 **C. 3 pages/subagent, parallel fan-out** — parent spawns 11
 subagents concurrently (⌈31/3⌉). Each reads its 3-page range and
-writes 3 per-page files to `refs/<name>-benchmark-3p/pNNNN.md`.
+writes 3 per-page files to `workspace/<name>-benchmark-3p/pNNNN.md`.
 
 **D. 5 pages/subagent, parallel fan-out** — parent spawns 7
 subagents concurrently (⌈31/5⌉). Each reads its 5-page range and
-writes 5 per-page files to `refs/<name>-benchmark-5p/pNNNN.md`.
+writes 5 per-page files to `workspace/<name>-benchmark-5p/pNNNN.md`.
 
 For C and D, "duration" is wall-clock (max across parallel subagents),
 "tool calls" and "tokens" are sums across all subagents.
@@ -100,11 +100,11 @@ Use **per-page single subagent** only when:
   - Per-subagent range: 2–6 tool uses, 19k–26k tokens, 18–96s
 - **D. 5p × 7 parallel**: 43 tool_uses (sum), 202,196 total_tokens (sum), 234,064 ms wall (max)
   - Per-subagent range: 2–8 tool uses, 19k–31k tokens, 21–234s
-- All runs: `general-purpose` subagent, same PDF (`refs/09-10 美日安保與亞太安全.pdf`),
+- All runs: `general-purpose` subagent, same PDF (`workspace/09-10 美日安保與亞太安全.pdf`),
   same protocol instructions (adapted for batching / parallelism)
-- Per-page outputs from A retained at `refs/09-10 美日安保與亞太安全.md` (aggregated).
-- B output retained at `refs/09-10 美日安保與亞太安全--benchmark.md` for
+- Per-page outputs from A retained at `workspace/09-10 美日安保與亞太安全.md` (aggregated).
+- B output retained at `workspace/09-10 美日安保與亞太安全--benchmark.md` for
   side-by-side comparison.
-- C output at `refs/09-10-benchmark-3p/pNNNN.md` (4-digit padding).
-- D output at `refs/09-10-benchmark-5p/pNNNN.md` (4-digit padding).
+- C output at `workspace/09-10-benchmark-3p/pNNNN.md` (4-digit padding).
+- D output at `workspace/09-10-benchmark-5p/pNNNN.md` (4-digit padding).
 - Delete C, D, and B benchmark outputs after quality review.

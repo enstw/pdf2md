@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Combine per-page markdown files in refs/<name>/ into refs/<name>.md.
-# Usage: scripts/combine-ref-pages.sh "<name>"
+# Combine per-page markdown files in workspace/<name>/ into workspace/<name>.md.
+# Usage: scripts/combine-workspace-pages.sh "<name>"
 # <name> is the PDF stem (without .pdf) or citation key — the same
-# <name> used for refs/<name>/pNNN.md and the target refs/<name>.md.
+# <name> used for workspace/<name>/pNNN.md and the target workspace/<name>.md.
 
 set -euo pipefail
 
@@ -12,8 +12,8 @@ if [[ $# -ne 1 ]]; then
 fi
 
 name="$1"
-src_dir="refs/$name"
-out_file="refs/$name.md"
+src_dir="workspace/$name"
+out_file="workspace/$name.md"
 
 if [[ ! -d "$src_dir" ]]; then
     echo "error: $src_dir does not exist" >&2
