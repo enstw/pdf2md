@@ -22,23 +22,16 @@ tier. Vision is reserved for PDFs that genuinely need it.
 
 ## When this protocol runs
 
-Two triggers:
-
-1. **New bib entry added** — when a new entry is added to
-   `references.bib` and its source is a PDF, transcribe it as part of
-   adding the entry.
-2. **Paper-branch startup** — when the agent starts work on a paper
-   branch, after reading `PROGRESS.md` but **before** any writing,
-   bulk-convert every `refs/*.pdf` that has no matching
-   `refs/<name>.md`. Pay the vision cost once (only on the PDFs that
-   need it) so every later citation lookup is a cheap plaintext read.
+**Paper-branch startup** — when the agent starts work on a paper
+branch, after reading `PROGRESS.md` but **before** any writing,
+bulk-convert every `refs/*.pdf` that has no matching `refs/<name>.md`.
+Pay the vision cost once (only on the PDFs that need it) so every
+later citation lookup is a cheap plaintext read.
 
 ## Per-PDF procedure
 
-1. **Pick the output name.**
-   - If the PDF filename matches a citation key in `references.bib`,
-     use that key: `refs/<citation_key>.md`.
-   - Otherwise use the PDF stem: `refs/<pdf-basename>.md`.
+1. **Pick the output name.** Use the PDF stem:
+   `refs/<pdf-basename>.md`.
 
 2. **Run `./pdf2md.py` (default path).**
    ```
@@ -167,7 +160,7 @@ so downstream consumers don't care which path ran.
 ```
 1. List refs/*.pdf
 2. For each PDF:
-     - Determine output name (citation key or stem)
+     - Determine output name (PDF stem)
      - If refs/<name>.md already exists and is non-empty, skip
      - Otherwise run the per-PDF procedure above (pdf2md.py →
        quality check → vision fallback if needed)
