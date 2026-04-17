@@ -555,6 +555,7 @@ def _write_markdown(
     langs: list[str],
     debug: bool = False,
     use_pdf_labels: bool = True,
+    emit_page_markers: bool = True,
 ):
     doc = fitz.open(str(extract_pdf))
     # label_doc may alias doc (macOS / clean-Linux path) or be a separate
@@ -602,13 +603,16 @@ def _write_markdown(
                     except ValueError:
                         pass  # non-numeric label (e.g. roman) — leave as-is
 
-                if prev_label is None:
-                    f.write(f"**[Page {current_label} start]**\n\n")
-                else:
-                    f.write(
-                        f"\n\n**[Page {prev_label} end, "
-                        f"Page {current_label} start]**\n\n"
-                    )
+                if emit_page_markers:
+                    if prev_label is None:
+                        f.write(f"**[Page {current_label} start]**\n\n")
+                    else:
+                        f.write(
+                            f"\n\n**[Page {prev_label} end, "
+                            f"Page {current_label} start]**\n\n"
+                        )
+                elif prev_label is not None:
+                    f.write("\n\n")
 
                 text, tier = _extract_page(
                     doc,
@@ -631,7 +635,7 @@ def _write_markdown(
 
                 prev_label = current_label
 
-            if prev_label is not None:
+            if prev_label is not None and emit_page_markers:
                 f.write(f"\n\n**[Page {prev_label} end]**\n")
     finally:
         if label_doc_owned:
@@ -650,6 +654,7 @@ def convert(
     force_ocr: bool = False,
     langs: list[str] | None = None,
     debug: bool = False,
+    emit_page_markers: bool = True,
 ):
     langs = langs or ["zh-Hant", "en-US"]
     src = Path(pdf_path)
@@ -703,6 +708,7 @@ def convert(
             langs=langs,
             debug=debug,
             use_pdf_labels=use_pdf_labels,
+            emit_page_markers=emit_page_markers,
         )
         return
 
@@ -733,6 +739,7 @@ def convert(
             langs=langs,
             debug=debug,
             use_pdf_labels=use_pdf_labels,
+            emit_page_markers=emit_page_markers,
         )
         return
 
@@ -753,6 +760,7 @@ def convert(
             langs=langs,
             debug=debug,
             use_pdf_labels=use_pdf_labels,
+            emit_page_markers=emit_page_markers,
         )
 
 
@@ -784,6 +792,12 @@ if __name__ == "__main__":
         "--debug", action="store_true",
         help="Stream per-page tier decisions to stderr (diagnostic).",
     )
+    parser.add_argument(
+        "--no-page-markers", action="store_true",
+        help="Suppress the **[Page N start]** / **[Page N end, Page M start]** "
+             "boundary markers in the output. Pages are separated by a blank "
+             "line only. Tier comments and the file header still render.",
+    )
 
     args = parser.parse_args()
     lang_list = [lg.strip() for lg in args.langs.split(",") if lg.strip()]
@@ -795,4 +809,5 @@ if __name__ == "__main__":
         force_ocr=args.force_ocr,
         langs=lang_list,
         debug=args.debug,
+        emit_page_markers=not args.no_page_markers,
     )

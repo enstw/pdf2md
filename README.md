@@ -58,6 +58,9 @@ you can audit where the extractor fell back.
 
 # Non-default languages (BCP-47 codes; mapped to tesseract on Linux)
 ./pdf2md.py input.pdf output.md --langs en-US,ja-JP
+
+# Suppress **[Page N start]** / **[Page N end]** boundary markers
+./pdf2md.py input.pdf output.md --no-page-markers
 ```
 
 Default languages: `zh-Hant,en-US`.
