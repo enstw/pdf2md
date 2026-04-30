@@ -773,7 +773,10 @@ if __name__ == "__main__":
                     "(Apple Vision on macOS, ocrmypdf on Linux).",
     )
     parser.add_argument("input", help="Input PDF path")
-    parser.add_argument("output", help="Output Markdown path")
+    parser.add_argument(
+        "output", nargs="?", default=None,
+        help="Output Markdown path (default: input PDF path with .md suffix)",
+    )
     parser.add_argument(
         "--offset", type=int, default=None,
         help="Page number offset (printed_page = physical + offset). "
@@ -801,10 +804,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     lang_list = [lg.strip() for lg in args.langs.split(",") if lg.strip()]
+    output_path = args.output or str(Path(args.input).with_suffix(".md"))
 
     convert(
         args.input,
-        args.output,
+        output_path,
         page_offset=args.offset,
         force_ocr=args.force_ocr,
         langs=lang_list,
