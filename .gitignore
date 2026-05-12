@@ -7,4 +7,6 @@ __pycache__/
 
 # User transcription workspace — keep the folder, ignore contents.
 workspace/*
+workspace/*.pdf
+workspace/*.md
 !workspace/README.txt

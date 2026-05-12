@@ -70,7 +70,7 @@ later citation lookup is a cheap plaintext read.
    - The subagent returns only the verdict + reason to the parent.
      Transcribed content never enters parent context.
 
-4. **If PASS, stop.** Commit `workspace/<name>.md`. Done.
+4. **If PASS, stop.** Do not commit `workspace/<name>.md` or the source PDF. Done.
 
 5. **If FAIL, fall back to vision.** Delete `workspace/<name>.md` and run
    the [Vision fan-out fallback](#vision-fan-out-fallback) below.
