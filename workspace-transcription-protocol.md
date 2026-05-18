@@ -14,7 +14,7 @@ Two-tier flow:
    `pymupdf4llm` with a per-page tesseract OCR fallback for gibberish
    pages. Zero vision tokens; fast.
 2. **Fallback path** — if the quality check on the `pdf2md.py` output
-   fails, re-transcribe the PDF through Claude's vision via the
+   fails, re-transcribe the PDF through the agent's native vision/multimodal capabilities via the
    parallel-subagent fan-out described below.
 
 Most PDFs (born-digital journal articles, clean scans) pass the first
@@ -50,9 +50,10 @@ tier. Vision is reserved for PDFs that genuinely need it.
 3. **Quality check (graded, 3-page sample).**
    - Pick three physical pages: first content page, middle page,
      last content page. Skip covers and blank versos.
-   - Spawn one `general-purpose` subagent. It `Read`s those three
+   - Spawn one `general-purpose` subagent. It uses its native file-reading tool (with vision support) to inspect those three
      pages from the PDF, reads the corresponding page spans in
      `workspace/<name>.md`, and returns one of:
+     *(Crucial: Do not write scripts like PyPDF2 or pdfplumber to extract text for this check. You MUST use your native vision tool to visually verify the PDF pages against the `.md` output.)*
      - `PASS` — downstream AI can recover the printed text from the
        `.md` (minor whitespace/ligature noise OK, tables as fences
        OK, Chinese punctuation variance OK).
@@ -85,13 +86,12 @@ so downstream consumers don't care which path ran.
    - Parent spawns `⌈pages/3⌉` `general-purpose` subagents
      concurrently in a single tool-call batch. Each subagent handles
      one contiguous 3-page range (the last one may be 1–3 pages).
-   - Each subagent calls `Read pages:"X-Y"` once for its 3-page
-     range, transcribes all 3 pages, then issues 3 separate
-     `Write workspace/<name>/pNNNN.md` calls — one per printed page,
-     4-digit zero-padded (`p0001.md`, `p0275.md`).
-   - Per-page `Write`s preserve save-points (a subagent that dies
+   - Each subagent uses its native file-reading tool to inspect its 3-page
+     range, transcribes all 3 pages, then uses its file-writing tools to create 3 separate
+     files — one per printed page, 4-digit zero-padded (`workspace/<name>/p0001.md`, `p0275.md`).
+   - Per-page writes preserve save-points (a subagent that dies
      mid-range still leaves completed pages on disk) while the
-     single 3-page `Read` amortizes vision-call overhead.
+     single 3-page read amortizes vision-call overhead.
    - Subagents return only a minimal status line to the parent
      (e.g. `done: physical 4-6, 3 files, 0 illegible, p0278-p0280`)
      so transcribed content never enters parent context.
