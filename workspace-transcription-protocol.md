@@ -20,14 +20,6 @@ Two-tier flow:
 Most PDFs (born-digital journal articles, clean scans) pass the first
 tier. Vision is reserved for PDFs that genuinely need it.
 
-## When this protocol runs
-
-**Paper-branch startup** — when the agent starts work on a paper
-branch, after reading `PROGRESS.md` but **before** any writing,
-bulk-convert every `workspace/*.pdf` that has no matching `workspace/<name>.md`.
-Pay the vision cost once (only on the PDFs that need it) so every
-later citation lookup is a cheap plaintext read.
-
 ## Per-PDF procedure
 
 1. **Pick the output name.** Use the PDF stem:
@@ -70,7 +62,7 @@ later citation lookup is a cheap plaintext read.
    - The subagent returns only the verdict + reason to the parent.
      Transcribed content never enters parent context.
 
-4. **If PASS, stop.** Do not commit `workspace/<name>.md` or the source PDF. Done.
+4. **If PASS, stop.** The generated `workspace/<name>.md` is ready for use.
 
 5. **If FAIL, fall back to vision.** Delete `workspace/<name>.md` and run
    the [Vision fan-out fallback](#vision-fan-out-fallback) below.
@@ -155,7 +147,7 @@ so downstream consumers don't care which path ran.
   preserving paragraph structure. Page markers don't apply unless
   the source has them.
 
-## Bulk-convert on paper-branch startup
+## Bulk-convert
 
 ```
 1. List workspace/*.pdf
@@ -164,11 +156,7 @@ so downstream consumers don't care which path ran.
      - If workspace/<name>.md already exists and is non-empty, skip
      - Otherwise run the per-PDF procedure above (pdf2md.py →
        quality check → vision fallback if needed)
-3. Commit the new .md files alongside the PDFs in a single commit
-   with message like `workspace: transcribe N PDFs before writing`
 ```
-
-Do not start writing paper content until this step is complete.
 
 ## Progress tracking
 
