@@ -164,8 +164,6 @@ so downstream consumers don't care which path ran.
      - If workspace/<name>.md already exists and is non-empty, skip
      - Otherwise run the per-PDF procedure above (pdf2md.py →
        quality check → vision fallback if needed)
-3. Commit the new .md files alongside the PDFs in a single commit
-   with message like `workspace: transcribe N PDFs before writing`
 ```
 
 Do not start writing paper content until this step is complete.
